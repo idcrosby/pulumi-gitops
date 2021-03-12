@@ -2,10 +2,12 @@ package main
 
 import (
 	"github.com/pulumi/pulumi-gcp/sdk/v4/go/gcp/container"
-	"github.com/pulumi/pulumi-gcp/sdk/v4/go/gcp/serviceAccount"
+	serviceaccount "github.com/pulumi/pulumi-gcp/sdk/v4/go/gcp/serviceAccount"
 	corev1 "github.com/pulumi/pulumi-kubernetes/sdk/v2/go/kubernetes/core/v1"
+	"github.com/pulumi/pulumi-kubernetes/sdk/v2/go/kubernetes/helm/v3"
 	metav1 "github.com/pulumi/pulumi-kubernetes/sdk/v2/go/kubernetes/meta/v1"
 	"github.com/pulumi/pulumi-kubernetes/sdk/v2/go/kubernetes/providers"
+	"github.com/pulumi/pulumi-kubernetes/sdk/v2/go/kubernetes/yaml"
 	"github.com/pulumi/pulumi/sdk/v2/go/pulumi"
 )
 
@@ -61,8 +63,87 @@ func main() {
 			return err
 		}
 
+		err = deployIngress(ctx)
+		if err != nil {
+			return err
+		}
+
+		err = deployArgo(ctx, k8sProvider)
+		if err != nil {
+			return err
+		}
+
 		return nil
 	})
+}
+
+func deployIngress(ctx *pulumi.Context) error {
+
+	_, err := helm.NewChart(ctx, "ingress-nginx", helm.ChartArgs{
+		Chart:     pulumi.String("ingress-nginx"),
+		Namespace: pulumi.String("ingress-nginx"),
+		FetchArgs: helm.FetchArgs{
+			Repo: pulumi.String("https://kubernetes.github.io/ingress-nginx"),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func deployArgo(ctx *pulumi.Context, provider pulumi.ProviderResource) error {
+	namespace := "argocd"
+	_, err := corev1.NewNamespace(ctx, namespace, &corev1.NamespaceArgs{
+		Metadata: &metav1.ObjectMetaArgs{
+			Name: pulumi.String(namespace),
+		},
+	}, pulumi.Provider(provider))
+
+	_, err = helm.NewChart(ctx, "argocd", helm.ChartArgs{
+		Namespace: pulumi.String(namespace),
+		Chart:     pulumi.String("argo-cd"),
+		FetchArgs: helm.FetchArgs{
+			Repo: pulumi.String("https://argoproj.github.io/argo-helm"),
+		},
+		Values: pulumi.Map{
+			"installCRDs": pulumi.Bool(false),
+			"server": pulumi.Map{
+				"service": pulumi.Map{
+					"type": pulumi.String("LoadBalancer"),
+				},
+			},
+		},
+		// The helm chart is using a deprecated apiVersion,
+		// So let's transform it
+		Transformations: []yaml.Transformation{
+			func(state map[string]interface{}, opts ...pulumi.ResourceOption) {
+				if state["apiVersion"] == "extensions/v1beta1" {
+					state["apiVersion"] = "networking.k8s.io/v1beta1"
+				}
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func setupRBAC() {
+
+}
+
+func setupManagedDatabases() {
+
+}
+
+func clusterAutoscaler() {
+
+}
+
+func deployOperators() {
+
 }
 
 func generateKubeconfig(clusterEndpoint pulumi.StringOutput, clusterName pulumi.StringOutput,
